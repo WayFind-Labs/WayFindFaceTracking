@@ -56,24 +56,24 @@ This service never performs blind full-database scans.
 
 ---
 
-## 2. Multi-Modal Biometric Architecture (Design Finalized — Implementation Pending)
+## 2. Multi-Modal Biometric Architecture
 
-### Design Patterns Chosen
+### Design Patterns Implemented
 
-#### Strategy Pattern — `BiometricExtractor` ABC
+#### Strategy Pattern — `BiometricExtractor` ABC (`biometrics/base.py`)
 Each biometric modality is a concrete strategy implementing a single interface:
 ```
 BiometricExtractor (ABC)
 ├── modality: BiometricModality
-└── extract(image: np.ndarray) -> EmbeddingVector
+└── extract(image: Union[str, np.ndarray, bytes]) -> EmbeddingVector
 
 Concrete Implementations:
-├── ArcFaceExtractor      ← FACE (current, wraps arcface_service.py)
-├── FingerprintExtractor  ← FINGERPRINT (future — stub raises NotImplementedError)
-└── BodyMarkExtractor     ← BODY_MARK (future — stub raises NotImplementedError)
+├── ArcFaceExtractor      ← FACE (wraps arcface_service.py)
+├── FingerprintExtractor  ← FINGERPRINT (roadmap stub)
+└── BodyMarkExtractor     ← BODY_MARK (roadmap stub)
 ```
 
-#### Registry Pattern — `ExtractorRegistry`
+#### Registry Pattern — `ExtractorRegistry` (`biometrics/registry.py`)
 Central singleton mapping `BiometricModality → BiometricExtractor`.
 Adding a new modality = implement extractor + one `registry.register()` call.
 Zero changes to API routes, match engine, or MCP client.
@@ -81,71 +81,58 @@ Zero changes to API routes, match engine, or MCP client.
 ### Supported Modalities (Enum)
 | Modality | Status | Model | Vector Dim |
 |---|---|---|---|
-| `FACE` | ✅ Active | InsightFace ArcFace (`buffalo_sc`) | 512-D |
-| `FINGERPRINT` | ⬜ Stub | TBD | TBD |
-| `BODY_MARK` | ⬜ Stub | TBD (CNN) | TBD |
-| `IRIS` | ⬜ Not started | TBD | TBD |
+| `FACE` | ✅ Operational | InsightFace ArcFace (`buffalo_sc`) | 512-D |
+| `FINGERPRINT` | ⬜ Stub (501) | TBD | 256-D |
+| `BODY_MARK` | ⬜ Stub (501) | TBD (CNN) | 128-D |
+| `IRIS` | ⬜ Roadmap | TBD | TBD |
 
 ### Unified Embedding Envelope
-All modalities produce:
-```python
-@dataclass
-class EmbeddingVector:
-    modality: BiometricModality
-    vector: np.ndarray        # 512-D for face, varies by modality
-    dimension: int
-    model_version: str        # "arcface-buffalo_sc-v1"
-    confidence: float         # 0.0 – 1.0 extraction confidence
-    embedding_id: str         # UUID — storage/retrieval key
-    created_at: datetime
-```
+All modalities produce `EmbeddingVector` dataclass containing:
+- `embedding_id`, `modality`, `vector` (normalized 1D ndarray), `dimension`, `model_version`, `confidence`, `person_id`, `metadata`, `created_at`
 
 ### Modality Safety Rule
 **Embeddings NEVER cross-compare across modalities.**
 `compare(FACE_embedding, FINGERPRINT_embedding)` → `400 MODALITY_MISMATCH`
 
-### Embed Call Use Cases
-| Scenario | Caller | When | Modality |
-|---|---|---|---|
-| Parent pre-registers child | ShelterAppUiBackend | Child registration flow | FACE (+ future FINGERPRINT) |
-| Found-child intake | MCP `image_match_candidates` | Citizen reports found child | FACE |
-| Body mark intake | MCP tool or backend | When face is unclear/unavailable | BODY_MARK (future) |
-
 ---
 
-## 3. Planned File Structure (`api/` + `biometrics/`)
+## 3. Implemented File Structure
 
 ```
 WayFindFaceTracking/
 │
 ├── api/                              ← FastAPI HTTP layer (port 8003)
-│   ├── main.py                       ← App entrypoint
+│   ├── main.py                       ← App entrypoint with CORS & error handlers
 │   ├── dependencies.py               ← DI: get_registry(), get_store()
 │   ├── routers/
-│   │   ├── health.py                 ← GET /health
-│   │   ├── embed.py                  ← POST /api/biometrics/embed
-│   │   ├── match.py                  ← POST /api/biometrics/match
-│   │   └── images.py                 ← POST /api/images/compare (MCP shim)
+│   │   ├── health.py                 ← GET /health, GET /
+│   │   ├── embed.py                  ← POST /api/biometrics/embed, /embed/direct
+│   │   ├── match.py                  ← POST /api/biometrics/match (modality-safe)
+│   │   └── images.py                 ← POST /api/images/compare (MCP client shim)
 │   └── schemas/
-│       ├── embed.py                  ← EmbedRequest, EmbedResponse
-│       └── match.py                  ← MatchRequest, MatchResponse
+│       ├── embed.py                  ← EmbedResponse, DirectVectorEmbedRequest
+│       └── match.py                  ← BiometricMatchRequest, ImageCompareRequest
 │
 ├── biometrics/                       ← Pure domain layer (no FastAPI dep)
 │   ├── modality.py                   ← BiometricModality enum
 │   ├── base.py                       ← BiometricExtractor ABC + EmbeddingVector
 │   ├── registry.py                   ← ExtractorRegistry singleton
-│   ├── store.py                      ← In-memory EmbeddingStore (swappable)
-│   ├── match_engine.py               ← Cosine similarity + ranking (modality-safe)
+│   ├── store.py                      ← In-memory EmbeddingStore (thread-safe)
+│   ├── match_engine.py               ← Cosine similarity, distance, fusion scoring
 │   └── extractors/
 │       ├── face.py                   ← ArcFaceExtractor (wraps arcface_service.py)
 │       ├── fingerprint.py            ← FingerprintExtractor (stub)
 │       └── body_mark.py              ← BodyMarkExtractor (stub)
 │
-├── arcface_service.py                ← Existing ArcFace engine (untouched)
-├── main.py                           ← Existing CLI (untouched)
-├── demo.py                           ← Existing demo suite (untouched)
-├── requirements.txt                  ← + fastapi, uvicorn, python-multipart
-└── .env.example
+├── tests/
+│   ├── test_domain.py                ← Core domain & fusion unit tests
+│   └── test_api.py                   ← FastAPI TestClient endpoint integration tests
+│
+├── arcface_service.py                ← Existing ArcFace engine
+├── main.py                           ← Existing CLI
+├── demo.py                           ← Existing demo suite
+├── requirements.txt                  ← Updated dependencies
+└── .env.example                      ← Service configuration template
 ```
 
 ---
@@ -158,38 +145,40 @@ WayFindFaceTracking/
 - CLI (`main.py`) with `convert` and `compare` commands
 - Demo suite (`demo.py`) for end-to-end verification
 
-### B. Environment & Hygiene
-- Python 3.12 venv, `requirements.txt` with `insightface`, `onnxruntime`, `opencv-python`, `numpy`, `pillow`, `scipy`
-- `.gitignore` covering `venv/`, `__pycache__/`, `.insightface/`, `output/`, `*.npy`, `*.json`
-- Git repository: `https://github.com/anserking/WayFindFaceTracking.git` (`main` branch)
+### B. Multi-Modal Domain Layer (`biometrics/` — Phase 1)
+- `BiometricModality` enum with case-insensitive parsing
+- `EmbeddingVector` unified envelope with L2 auto-normalization
+- `BiometricExtractor` ABC (Strategy Pattern)
+- `ArcFaceExtractor`, `FingerprintExtractor`, `BodyMarkExtractor`
+- `ExtractorRegistry` singleton with dynamic modality registration
+- `EmbeddingStore` thread-safe in-memory cache with secondary person & modality indices
+- `BiometricMatchEngine` with strict `MODALITY_MISMATCH` protection and multi-modal weighted fusion scoring
 
-### C. Workflow & Context Guardrails
-- `workflow-guardrails` skill: pre-task pull, post-phase commit/push, conventional commits
-- Context skill maintenance guardrails
+### C. FastAPI Biometric Microservice (`api/` — Phase 2)
+- `GET /health`: Operational liveness & modality availability
+- `POST /api/biometrics/embed`: Multipart image extraction & storage
+- `POST /api/biometrics/embed/direct`: Direct pre-computed vector registration
+- `POST /api/biometrics/match`: Modality-safe candidate ranking
+- `POST /api/images/compare`: Backward-compatible MCP client shim matching `ImageBackendClient`
+- 100% test coverage passing across all 12 domain and API test cases
 
 ---
 
 ## 5. Pending Roadmap
 
-1. **FastAPI Biometric Microservice (`api/` + `biometrics/`)** — ⬜ IN DESIGN
-   - Multi-modal architecture with Strategy + Registry patterns
-   - Phase A: FACE modality fully working, stubs for FINGERPRINT and BODY_MARK
-   - Phase B: Update context + commit
-
-2. **Model Cache Pre-loader (`scripts/download_models.py`)** — ⬜
+1. **Model Cache Pre-loader (`scripts/download_models.py`)** — ⬜
    - Pre-download `buffalo_sc` / `buffalo_l` for offline operation
 
-3. **Real-Time Video Stream Tracking (`tracking_stream.py`)** — ⬜
+2. **Real-Time Video Stream Tracking (`tracking_stream.py`)** — ⬜
    - OpenCV webcam/RTSP with live face bounding box + embedding extraction
 
-4. **Fast 1:N Vector Indexing (FAISS / Qdrant)** — ⬜
+3. **Fast 1:N Vector Indexing (FAISS / Qdrant)** — ⬜
    - Replace in-memory `EmbeddingStore` with persistent vector DB
 
-5. **Multi-Modal Fusion Matching** — ⬜ (Phase 4+)
-   - Weighted fusion: `score = 0.6×face + 0.3×fingerprint + 0.1×body_mark`
-   - `POST /api/biometrics/fuse-match` route
+4. **Multi-Modal Fusion Matching Endpoint** — ⬜ (Phase 4+)
+   - Dedicated `POST /api/biometrics/fuse-match` route for combined multi-sensor reports
 
-6. **GPU Acceleration** — ⬜
+5. **GPU Acceleration** — ⬜
    - `CUDAExecutionProvider` and `TensorRTExecutionProvider`
 
 ---
