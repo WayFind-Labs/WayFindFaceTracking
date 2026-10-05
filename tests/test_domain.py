@@ -157,8 +157,29 @@ def test_match_engine_similarity_and_mismatch_guardrail():
 
 
 def test_fusion_scoring():
-    fusion = BiometricMatchEngine.fuse_scores({
-        BiometricModality.FACE: 0.90,
-        BiometricModality.FINGERPRINT: 0.80,
-    })
-    assert np.isclose(fusion, 0.8625)
+    # 1. Multi-modal fusion across FACE (0.50), IRIS (0.30), FINGERPRINT (0.20)
+    scores = {
+        "FACE": 0.80,
+        "IRIS": 0.90,
+        "FINGERPRINT": 0.70,
+    }
+    res = BiometricMatchEngine.fuse_multi_biometrics(scores, threshold_percent=40.0)
+    # 0.50*0.80 + 0.30*0.90 + 0.20*0.70 = 0.40 + 0.27 + 0.14 = 0.81 -> 81.0%
+    assert np.isclose(res.fused_score, 81.0)
+    assert np.isclose(res.fused_score_raw, 0.81)
+    assert res.is_match is True
+    assert res.weights_used["FACE"] == 0.50
+    assert res.weights_used["IRIS"] == 0.30
+    assert res.weights_used["FINGERPRINT"] == 0.20
+
+    # 2. Single modality fallback (FACE only) -> 100% weight on FACE
+    res_single = BiometricMatchEngine.fuse_multi_biometrics({"FACE": 0.85})
+    assert np.isclose(res_single.fused_score, 85.0)
+    assert res_single.is_match is True
+    assert res_single.weights_used["FACE"] == 1.0
+
+    # 3. Low score below 40.0% threshold -> is_match = False
+    res_low = BiometricMatchEngine.fuse_multi_biometrics({"FACE": 0.30, "FINGERPRINT": 0.20}, threshold_percent=40.0)
+    assert res_low.is_match is False
+    assert res_low.fused_score < 40.0
+

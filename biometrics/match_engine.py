@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import numpy as np
 
 from biometrics.base import EmbeddingVector
@@ -33,10 +33,31 @@ class MatchResultItem:
         }
 
 
+@dataclass
+class FusedMatchResult:
+    """Structured result for weighted multi-biometric score fusion."""
+    fused_score: float  # Percentage scale: 0.0 to 100.0%
+    fused_score_raw: float  # Scale: 0.0 to 1.0
+    individual_scores: Dict[str, float]  # Modality to individual cosine score
+    is_match: bool  # True if fused_score >= threshold_percent
+    threshold_percent: float  # Unified match threshold percentage (default 40.0%)
+    weights_used: Dict[str, float]  # Normalized weight applied per modality
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "fused_score": round(self.fused_score, 2),
+            "fused_score_raw": round(self.fused_score_raw, 4),
+            "individual_scores": self.individual_scores,
+            "is_match": self.is_match,
+            "threshold_percent": round(self.threshold_percent, 2),
+            "weights_used": {k: round(v, 4) for k, v in self.weights_used.items()},
+        }
+
+
 class BiometricMatchEngine:
     """
     Mathematical similarity matching engine for multi-modal biometric vectors.
-    Enforces strict modality boundaries and calculates cosine and Euclidean distance metrics.
+    Enforces strict modality boundaries and calculates cosine, Euclidean, and weighted fusion scores.
     """
 
     # Default similarity thresholds per modality (cosine similarity scale 0.0 to 1.0)
@@ -45,6 +66,14 @@ class BiometricMatchEngine:
         BiometricModality.FINGERPRINT: 0.60,
         BiometricModality.BODY_MARK: 0.55,
         BiometricModality.IRIS: 0.70,
+    }
+
+    # Configurable weight constants (w_face = 0.50, w_iris = 0.30, w_fingerprint = 0.20 sum to 1.0)
+    DEFAULT_WEIGHTS = {
+        BiometricModality.FACE: 0.50,
+        BiometricModality.IRIS: 0.30,
+        BiometricModality.FINGERPRINT: 0.20,
+        BiometricModality.BODY_MARK: 0.20,
     }
 
     @classmethod
@@ -125,35 +154,108 @@ class BiometricMatchEngine:
         return results
 
     @classmethod
+    def fuse_multi_biometrics(
+        cls,
+        scores_by_modality: Dict[Union[BiometricModality, str], float],
+        custom_weights: Optional[Dict[Union[BiometricModality, str], float]] = None,
+        threshold_percent: float = 40.0,
+    ) -> FusedMatchResult:
+        """
+        Compute weighted multi-modal biometric confidence score across available modalities.
+        Weights are automatically normalized across present biometrics (e.g. 100% on single modality).
+
+        Args:
+            scores_by_modality: Mapping of modality (enum or string like "FACE", "IRIS", "FINGERPRINT")
+                                to individual similarity score (0.0 to 1.0).
+            custom_weights: Optional custom weights mapping per modality.
+            threshold_percent: Minimum unified fused score threshold percentage for a match (default: 40.0%).
+
+        Returns:
+            FusedMatchResult object containing fused_score (0-100%), individual_scores, is_match, and weights_used.
+        """
+        if not scores_by_modality:
+            return FusedMatchResult(
+                fused_score=0.0,
+                fused_score_raw=0.0,
+                individual_scores={},
+                is_match=False,
+                threshold_percent=threshold_percent,
+                weights_used={},
+            )
+
+        # Parse and normalize keys
+        normalized_scores: Dict[BiometricModality, float] = {}
+        for mod_key, score in scores_by_modality.items():
+            if isinstance(mod_key, BiometricModality):
+                mod_enum = mod_key
+            else:
+                try:
+                    mod_enum = BiometricModality.from_str(str(mod_key))
+                except ValueError:
+                    continue
+            normalized_scores[mod_enum] = float(np.clip(score, 0.0, 1.0))
+
+        if not normalized_scores:
+            return FusedMatchResult(
+                fused_score=0.0,
+                fused_score_raw=0.0,
+                individual_scores={},
+                is_match=False,
+                threshold_percent=threshold_percent,
+                weights_used={},
+            )
+
+        # Determine base weight per present modality
+        weights_for_present: Dict[BiometricModality, float] = {}
+
+        for mod_enum in normalized_scores.keys():
+            w = 0.25
+            if custom_weights:
+                if mod_enum in custom_weights:
+                    w = float(custom_weights[mod_enum])
+                elif mod_enum.value in custom_weights:
+                    w = float(custom_weights[mod_enum.value])
+                elif mod_enum.name in custom_weights:
+                    w = float(custom_weights[mod_enum.name])
+            else:
+                w = cls.DEFAULT_WEIGHTS.get(mod_enum, 0.25)
+            weights_for_present[mod_enum] = max(0.0, w)
+
+        total_weight = sum(weights_for_present.values())
+        if total_weight == 0:
+            total_weight = float(len(normalized_scores))
+            normalized_weights = {m: 1.0 / total_weight for m in normalized_scores.keys()}
+        else:
+            normalized_weights = {m: w / total_weight for m, w in weights_for_present.items()}
+
+        weighted_sum = sum(
+            normalized_weights[m] * normalized_scores[m] for m in normalized_scores.keys()
+        )
+        fused_raw = float(np.clip(weighted_sum, 0.0, 1.0))
+        fused_percent = float(round(fused_raw * 100.0, 2))
+        is_match = bool(fused_percent >= threshold_percent)
+
+        indiv_scores_dict = {m.value: round(normalized_scores[m], 4) for m in normalized_scores.keys()}
+        weights_used_dict = {m.value: round(normalized_weights[m], 4) for m in normalized_scores.keys()}
+
+        return FusedMatchResult(
+            fused_score=fused_percent,
+            fused_score_raw=round(fused_raw, 4),
+            individual_scores=indiv_scores_dict,
+            is_match=is_match,
+            threshold_percent=threshold_percent,
+            weights_used=weights_used_dict,
+        )
+
+    @classmethod
     def fuse_scores(
         cls,
         scores_by_modality: Dict[BiometricModality, float],
         custom_weights: Optional[Dict[BiometricModality, float]] = None,
     ) -> float:
         """
-        Calculate weighted fusion score across multiple biometric modalities.
-        Weights are normalized automatically across present modalities.
+        Legacy helper returning raw fused score (0.0 to 1.0).
+        Delegates to fuse_multi_biometrics.
         """
-        if not scores_by_modality:
-            return 0.0
-
-        default_weights = {
-            BiometricModality.FACE: 0.50,
-            BiometricModality.FINGERPRINT: 0.30,
-            BiometricModality.BODY_MARK: 0.20,
-            BiometricModality.IRIS: 0.50,
-        }
-        weights = custom_weights or default_weights
-
-        total_weight = 0.0
-        weighted_sum = 0.0
-
-        for modality, score in scores_by_modality.items():
-            w = weights.get(modality, 0.25)
-            weighted_sum += w * float(np.clip(score, 0.0, 1.0))
-            total_weight += w
-
-        if total_weight == 0:
-            return 0.0
-
-        return round(weighted_sum / total_weight, 4)
+        res = cls.fuse_multi_biometrics(scores_by_modality, custom_weights=custom_weights)
+        return res.fused_score_raw
