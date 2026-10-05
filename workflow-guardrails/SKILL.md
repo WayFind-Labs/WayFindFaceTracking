@@ -29,23 +29,33 @@ git pull origin main
 
 > [!IMPORTANT]
 > **RULE 2: Commit & Push After Every Major Phase of Work**
-> Upon completing any major phase, feature implementation, bug fix, or refactoring step:
+> Upon completing any major phase, feature implementation, bug fix, refactoring step, or user-assigned task:
 > 1. Run local verification scripts (`python main.py` or `python demo.py`).
-> 2. Ensure virtual environments (`venv/`), `.insightface/`, `__pycache__/`, and `.npy`/`.json` outputs remain ignored.
-> 3. Stage, commit with a clear Conventional Commit message, and push to GitHub.
+> 2. **Context Skill Audit & Update**: Check if [`context/SKILL.md`](file:///c:/Users/Lenovo/Desktop/FaceTracking/context/SKILL.md) and [`.agents/skills/context/SKILL.md`](file:///c:/Users/Lenovo/Desktop/FaceTracking/.agents/skills/context/SKILL.md) need updates (completed features, new tasks, modified architecture). Update both files prior to staging.
+> 3. Ensure virtual environments (`venv/`), `.insightface/`, `__pycache__/`, and `.npy`/`.json` outputs remain ignored.
+> 4. Stage, commit with a clear Conventional Commit message, and push to GitHub.
+
+> [!IMPORTANT]
+> **RULE 3: Pre-Push Context Skill Synchronization Check**
+> Before running `git push origin main`, always perform a mandatory check:
+> - *Did we add, update, or refactor any code, or complete a task given by the user that is not yet documented in the context skill?*
+> - If **YES**, update Section 2 (Completed Work) and Section 3 (Roadmap) in both Context Skill files (`context/SKILL.md` and `.agents/skills/context/SKILL.md`) first.
 
 ### Required Post-Phase Commands:
 ```bash
-# 1. Check working directory status
+# 1. Verify working directory status
 git status
 
-# 2. Stage untracked and modified project files
+# 2. Update context skills if work/features/tasks were updated or completed
+# (Edit context/SKILL.md and .agents/skills/context/SKILL.md if needed)
+
+# 3. Stage untracked and modified project files (including updated skills)
 git add .
 
-# 3. Commit with a descriptive Conventional Commit message
+# 4. Commit with a descriptive Conventional Commit message
 git commit -m "<type>(<scope>): <descriptive summary of changes>"
 
-# 4. Push to remote main branch
+# 5. Push to remote main branch
 git push origin main
 ```
 

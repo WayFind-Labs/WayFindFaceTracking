@@ -62,6 +62,10 @@ The **WayFind FaceTracking** project is a high-performance facial recognition an
 - **[`.gitignore`](file:///c:/Users/Lenovo/Desktop/FaceTracking/.gitignore)**: Configured to ignore `venv/`, `__pycache__/`, `.insightface/`, `output/`, and temporary build artifacts.
 - **Git Repository**: Initialized, cleaned of untracked index cache (`git rm -r --cached .`), committed, and pushed to GitHub: `https://github.com/anserking/WayFindFaceTracking.git` (`main` branch).
 
+### E. Workflow & Context Guardrails
+- **[`workflow-guardrails`](file:///c:/Users/Lenovo/Desktop/FaceTracking/workflow-guardrails/SKILL.md)**: Defines mandatory pre-task `git pull` enforcement, post-phase verification, conventional commit standards, and pre-push context synchronization audits.
+- **[`facetracking-context`](file:///c:/Users/Lenovo/Desktop/FaceTracking/context/SKILL.md)**: Contains full project architecture, implementation status, roadmap, and mandatory update guardrails to keep project context synced after every task and before every `git push`.
+
 ---
 
 ## 3. Pending Roadmap & Next Steps (What Needs To Be Done)
@@ -80,3 +84,17 @@ The **WayFind FaceTracking** project is a high-performance facial recognition an
 
 5. **GPU Acceleration & Optimization**:
    - Add support for `CUDAExecutionProvider` and `TensorRTExecutionProvider` for high-FPS multi-camera tracking.
+
+---
+
+## 4. Context Skill Update & Maintenance Guardrails
+
+> [!IMPORTANT]
+> **MANDATORY Context Synchronization Guardrail**
+> 1. **Trigger for Update**: Whenever updating any component, introducing new features/files, refactoring architecture, adjusting dependencies, or completing any user task (especially tasks not previously documented in this skill), the agent MUST update this Context Skill upon completing the work phase.
+> 2. **Post-Phase Synchronization**: After completing any implementation phase or task, verify and update:
+>    - **Completed Work & Current Implementation (Section 2)**: Record new capabilities, added files, and completed roadmap items.
+>    - **Architecture & Dependencies (Section 1 & 2A)**: Update system topology or package dependencies if changed.
+>    - **Pending Roadmap (Section 3)**: Update remaining, modified, or newly identified project tasks.
+> 3. **Pre-Push Validation Requirement**: Before executing `git push` to upload code to GitHub, check whether the Context Skill accurately reflects the latest codebase state. If updates are needed, update both [`context/SKILL.md`](file:///c:/Users/Lenovo/Desktop/FaceTracking/context/SKILL.md) and [`.agents/skills/context/SKILL.md`](file:///c:/Users/Lenovo/Desktop/FaceTracking/.agents/skills/context/SKILL.md), stage them (`git add .`), and commit before pushing.
+
