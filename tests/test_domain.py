@@ -88,6 +88,42 @@ def test_embedding_store_operations():
     assert len(store.get_by_person("child_123")) == 1
 
 
+def test_qdrant_search_and_metadata():
+    store = EmbeddingStore()
+    emb = EmbeddingVector.create(
+        modality=BiometricModality.FACE,
+        vector=[1.0] + [0.0] * 511,
+        model_version="test-v1",
+        person_id="child_456",
+        metadata={
+            "child_name": "Johnny Doe",
+            "status_type": "missing",
+            "contact_info": "555-0199",
+            "location": "Shelter A",
+            "timestamp": "2026-10-05T00:00:00Z",
+        },
+    )
+    store.save(emb)
+
+    hits = store.search(
+        query_vector=[1.0] + [0.0] * 511,
+        modality=BiometricModality.FACE,
+        top_k=5,
+        threshold=0.40,
+    )
+    assert len(hits) == 1
+    hit = hits[0]
+    assert hit["embedding_id"] == emb.embedding_id
+    assert hit["person_id"] == "child_456"
+    assert hit["child_name"] == "Johnny Doe"
+    assert hit["status_type"] == "missing"
+    assert hit["contact_info"] == "555-0199"
+    assert hit["location"] == "Shelter A"
+    assert hit["is_match"] is True
+    assert hit["similarity_score"] >= 0.40
+
+
+
 def test_match_engine_similarity_and_mismatch_guardrail():
     emb1 = EmbeddingVector.create(
         modality=BiometricModality.FACE,

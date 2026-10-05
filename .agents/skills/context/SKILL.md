@@ -160,6 +160,13 @@ WayFindFaceTracking/
 - `POST /api/images/compare`: Backward-compatible MCP client shim matching `ImageBackendClient`
 - 100% test coverage passing across all 12 domain and API test cases
 
+### D. Persistent Qdrant Vector Database (`biometrics/store.py` — Phase 3)
+- `EmbeddingStore` backed by `qdrant-client` targeting `"wayfind_biometrics"` 512-D Cosine collection
+- Supports local in-memory testing (`:memory:`) by default with environment overrides (`QDRANT_URL`, `QDRANT_HOST`, `QDRANT_PORT`, `QDRANT_API_KEY`)
+- Rich metadata payload support (`child_name`, `status_type`, `contact_info`, `location`, `timestamp`)
+- HNSW Cosine similarity search with configurable threshold (default `0.40`)
+- 100% test coverage passing across all 13 domain and API test cases
+
 ---
 
 ## 5. Pending Roadmap
@@ -170,11 +177,12 @@ WayFindFaceTracking/
 2. **Real-Time Video Stream Tracking (`tracking_stream.py`)** — ⬜
    - OpenCV webcam/RTSP with live face bounding box + embedding extraction
 
-3. **Fast 1:N Vector Indexing (FAISS / Qdrant)** — ⬜
-   - Replace in-memory `EmbeddingStore` with persistent vector DB
+3. **Persistent Qdrant Vector DB Integration** — ✅
+   - Upgraded `EmbeddingStore` to Qdrant HNSW vector search with metadata payload support
 
 4. **Multi-Modal Fusion Matching Endpoint** — ⬜ (Phase 4+)
    - Dedicated `POST /api/biometrics/fuse-match` route for combined multi-sensor reports
+
 
 5. **GPU Acceleration** — ⬜
    - `CUDAExecutionProvider` and `TensorRTExecutionProvider`
