@@ -1,100 +1,177 @@
 ---
 name: facetracking-context
-description: WayFind FaceTracking Project Context - Current state, completed features, architecture, and roadmap.
+description: WayFind FaceTracking Project Context - Current state, completed features, multi-modal biometric architecture, and roadmap.
 ---
 
-# WayFind FaceTracking Subsystem - Project Context
+# WayFind FaceTracking Subsystem — Project Context
 
 ## Executive Summary
-The **WayFind FaceTracking** project is a high-performance facial recognition and biometric vector analysis subsystem within the larger **WayFind Intelligent Platform**. It provides core face detection, 512-dimensional ArcFace feature vector extraction, vector persistence, and fast vector comparison capabilities.
+
+The **WayFind FaceTracking** project is the standalone **Biometric Vision Microservice**
+within the larger WayFind intelligent missing-child platform. It runs on **port 8003**,
+accepts image uploads via HTTP, and returns biometric embedding vectors and similarity
+scores. It is decoupled from all other services via `ImageBackendClient` in `WayFindMCPClient`.
 
 ---
 
-## 1. Overall System Architecture & Scope
+## 1. Role in the WayFind Platform
+
+```text
+┌─────────────────────────────────────────────────────────────────────────┐
+│                       Next.js PWA Client (ShelterApp ui)                │
+└────────────────────────────────────┬────────────────────────────────────┘
+                                     │ REST / WebSockets
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                   Core Backend (ShelterAppUiBackend)                    │
+│   • Temporal Window Engine, Multi-Attribute Scoring Engine              │
+│   • Guardian Registry, SOS Beacons, Found Child Cases                  │
+└──────────────────┬──────────────────────────────────────────────────────┘
+                   │
+                   ▼ (Top 3–5 candidates; only if significance_score >= 0.60)
+┌─────────────────────────────────────────────────────────────────────────┐
+│         WayFindMCPClient (LangGraph Agent + FastMCP Server)             │
+│   • image_match_candidates MCP tool                                     │
+│   • ImageBackendClient → POST /api/images/compare                       │
+│   • IMAGE_BACKEND_URL env var points to this service                    │
+└──────────────────┬──────────────────────────────────────────────────────┘
+                   │ HTTP (IMAGE_BACKEND_URL=http://localhost:8003)
+                   ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│       WayFindFaceTracking — Biometric Vision Microservice (Port 8003)   │
+│                                                                         │
+│   POST /api/biometrics/embed   → Image → EmbeddingVector (by modality) │
+│   POST /api/biometrics/match   → Embedding vs Candidates → Ranked hits  │
+│   POST /api/images/compare     → MCP contract shim (media_id based)    │
+│   GET  /health                 → Liveness + supported modalities        │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Significance Gating (enforced by MCP client, not this service):**
+Biometric scanning is ONLY triggered when the deterministic metadata scoring
+engine produces `significance_score >= 0.60` on pre-filtered candidates.
+This service never performs blind full-database scans.
+
+---
+
+## 2. Multi-Modal Biometric Architecture (Design Finalized — Implementation Pending)
+
+### Design Patterns Chosen
+
+#### Strategy Pattern — `BiometricExtractor` ABC
+Each biometric modality is a concrete strategy implementing a single interface:
+```
+BiometricExtractor (ABC)
+├── modality: BiometricModality
+└── extract(image: np.ndarray) -> EmbeddingVector
+
+Concrete Implementations:
+├── ArcFaceExtractor      ← FACE (current, wraps arcface_service.py)
+├── FingerprintExtractor  ← FINGERPRINT (future — stub raises NotImplementedError)
+└── BodyMarkExtractor     ← BODY_MARK (future — stub raises NotImplementedError)
+```
+
+#### Registry Pattern — `ExtractorRegistry`
+Central singleton mapping `BiometricModality → BiometricExtractor`.
+Adding a new modality = implement extractor + one `registry.register()` call.
+Zero changes to API routes, match engine, or MCP client.
+
+### Supported Modalities
+| Modality | Status | Model | Vector Dim |
+|---|---|---|---|
+| `FACE` | ✅ Active | InsightFace ArcFace (`buffalo_sc`) | 512-D |
+| `FINGERPRINT` | ⬜ Stub | TBD | TBD |
+| `BODY_MARK` | ⬜ Stub | TBD (CNN) | TBD |
+| `IRIS` | ⬜ Not started | TBD | TBD |
+
+### Unified Embedding Envelope
+All modalities produce an `EmbeddingVector` dataclass containing:
+- `modality`, `vector`, `dimension`, `model_version`, `confidence`, `embedding_id`, `created_at`
+
+### Modality Safety Rule
+**Embeddings NEVER cross-compare across modalities.**
+`compare(FACE_embedding, FINGERPRINT_embedding)` → `400 MODALITY_MISMATCH`
+
+---
+
+## 3. Completed Work & Current Implementation
+
+### A. Core ArcFace Engine (`arcface_service.py`)
+- `ArcFaceService` class with `image_to_vector()`, `save_vector()`, `load_vector()`, `compare_vectors()`
+- InsightFace `buffalo_sc` model, CPU execution provider, 512-D normalized embeddings
+- Cosine similarity, cosine distance, Euclidean distance, match decision + confidence
+
+### B. CLI & Demo Suite
+- `main.py`: CLI with `convert` and `compare` commands
+- `demo.py`: Automated verification (vector extraction, persistence, positive/negative match)
+
+### C. Environment & Hygiene
+- Python 3.12 venv, `requirements.txt`
+- `.gitignore` covering `venv/`, `__pycache__/`, `.insightface/`, `output/`, `*.npy`, `*.json`
+- Git: `https://github.com/anserking/WayFindFaceTracking.git` (`main` branch)
+
+### D. Workflow & Context Guardrails
+- `workflow-guardrails` skill with pre-task pull, post-phase commit/push, conventional commits
+- Context skill maintenance guardrails (this file + `context/SKILL.md`)
+
+---
+
+## 4. Planned File Structure (Next Implementation Phase)
 
 ```
-+-----------------------------------------------------------------------+
-|                         WayFind Platform                              |
-|                                                                       |
-|  +-------------------------+         +-----------------------------+  |
-|  |   WayFind Spatial &     |         |   WayFind FaceTracking      |  |
-|  |   Navigation Core       | <=====> |   Subsystem                 |  |
-|  +-------------------------+         +-----------------------------+  |
-|                                                     |                 |
-|                                       +-------------+-------------+   |
-|                                       |                           |   |
-|                                       v                           v   |
-|                              [Image to Vector]           [Compare Vectors] |
-|                              (512-D ArcFace)             (Cosine / L2) |
-+-----------------------------------------------------------------------+
+WayFindFaceTracking/
+├── api/                              ← FastAPI HTTP layer (port 8003)
+│   ├── main.py
+│   ├── dependencies.py
+│   ├── routers/
+│   │   ├── health.py                 ← GET /health
+│   │   ├── embed.py                  ← POST /api/biometrics/embed
+│   │   ├── match.py                  ← POST /api/biometrics/match
+│   │   └── images.py                 ← POST /api/images/compare (MCP shim)
+│   └── schemas/
+│       ├── embed.py
+│       └── match.py
+├── biometrics/                       ← Pure domain layer
+│   ├── modality.py                   ← BiometricModality enum
+│   ├── base.py                       ← BiometricExtractor ABC + EmbeddingVector
+│   ├── registry.py                   ← ExtractorRegistry singleton
+│   ├── store.py                      ← In-memory EmbeddingStore
+│   ├── match_engine.py               ← Cosine similarity + ranking
+│   └── extractors/
+│       ├── face.py                   ← ArcFaceExtractor
+│       ├── fingerprint.py            ← Stub
+│       └── body_mark.py              ← Stub
+├── arcface_service.py                ← Existing (untouched)
+├── requirements.txt                  ← + fastapi, uvicorn, python-multipart
+└── .env.example
 ```
 
-### Core Responsibilities
-- **Biometric Feature Extraction**: Transform raw face images (BGR/RGB/Files) into normalized 512-D floating-point feature embeddings using ArcFace neural network models (`insightface` ONNX backend).
-- **Vector Persistence**: Serialize face embeddings along with rich identity metadata into JSON or NumPy (`.npy`) format.
-- **Identity Matching**: Calculate high-accuracy similarity metrics between vectors to perform identity verification (1:1 matching) and identification (1:N matching).
+---
+
+## 5. Pending Roadmap
+
+1. **FastAPI Biometric Microservice (`api/` + `biometrics/`)** — ⬜ IN DESIGN
+   - Multi-modal Strategy + Registry pattern architecture
+   - Phase A: FACE modality fully working; FINGERPRINT and BODY_MARK as stubs
+
+2. **Model Cache Pre-loader (`scripts/download_models.py`)** — ⬜
+
+3. **Real-Time Video Stream Tracking** — ⬜
+
+4. **Fast 1:N Vector Indexing (FAISS / Qdrant)** — ⬜
+   - Replace in-memory store with persistent vector DB
+
+5. **Multi-Modal Fusion Matching** — ⬜ (Phase 4+)
+   - `POST /api/biometrics/fuse-match` with weighted fusion scoring
+
+6. **GPU Acceleration** — ⬜
 
 ---
 
-## 2. Completed Work & Current Implementation
-
-### A. Environment & Setup
-- **Virtual Environment**: Python 3.12 isolated environment configured in `venv/`.
-- **Environment Verification**: [`test_env.py`](file:///c:/Users/Lenovo/Desktop/FaceTracking/test_env.py) verifies runtime execution.
-- **Dependencies ([`requirements.txt`](file:///c:/Users/Lenovo/Desktop/FaceTracking/requirements.txt))**: `insightface`, `onnxruntime`, `opencv-python`, `numpy`, `pillow`, `scipy`.
-
-### B. Core ArcFace Engine ([`arcface_service.py`](file:///c:/Users/Lenovo/Desktop/FaceTracking/arcface_service.py))
-- **`ArcFaceService` Class**:
-  - `image_to_vector(image_input, save_path=None, metadata=None)`: Detects face, crops/aligns, generates 512-D normalized vector, and optionally saves to disk.
-  - `save_vector(vector, save_path, metadata)`: Serializes vector into `.json` (with metadata) or `.npy` format.
-  - `load_vector(vector_input)`: Deserializes vector from `.json`, `.npy`, list, or NumPy array.
-  - `compare_vectors(vector1, vector2, threshold=0.5)`: Computes:
-    - **Cosine Similarity**: $\mathbf{v_1} \cdot \mathbf{v_2}$
-    - **Cosine Distance**: $1 - \text{CosineSimilarity}$
-    - **Euclidean Distance**: $\|\mathbf{v_1} - \mathbf{v_2}\|_2$
-    - **Match Decision & Confidence Score (%)**
-
-### C. CLI & Demonstration Suite
-- **[`main.py`](file:///c:/Users/Lenovo/Desktop/FaceTracking/main.py)**: CLI with `convert` and `compare` commands.
-- **[`demo.py`](file:///c:/Users/Lenovo/Desktop/FaceTracking/demo.py)**: Automated verification script testing vector extraction, persistence, positive match, and negative match scenarios.
-
-### D. Version Control & Hygiene
-- **[`.gitignore`](file:///c:/Users/Lenovo/Desktop/FaceTracking/.gitignore)**: Configured to ignore `venv/`, `__pycache__/`, `.insightface/`, `output/`, and temporary build artifacts.
-- **Git Repository**: Initialized, cleaned of untracked index cache (`git rm -r --cached .`), committed, and pushed to GitHub: `https://github.com/anserking/WayFindFaceTracking.git` (`main` branch).
-
-### E. Workflow & Context Guardrails
-- **[`workflow-guardrails`](file:///c:/Users/Lenovo/Desktop/FaceTracking/workflow-guardrails/SKILL.md)**: Defines mandatory pre-task `git pull` enforcement, post-phase verification, conventional commit standards, and pre-push context synchronization audits.
-- **[`facetracking-context`](file:///c:/Users/Lenovo/Desktop/FaceTracking/context/SKILL.md)**: Contains full project architecture, implementation status, roadmap, and mandatory update guardrails to keep project context synced after every task and before every `git push`.
-
----
-
-## 3. Pending Roadmap & Next Steps (What Needs To Be Done)
-
-1. **Model Cache Pre-loader (`scripts/download_models.py`)**:
-   - Implement an explicit script to pre-download and verify InsightFace model bundles (`buffalo_sc` / `buffalo_l`) to ensure offline operation without downloading on first runtime execution.
-
-2. **Real-Time Video Stream Tracking (`tracking_stream.py`)**:
-   - Integrate OpenCV webcam/RTSP stream reader with real-time face bounding box overlays, landmark alignment, and live face embedding extraction.
-
-3. **Fast 1:N Vector Indexing & Search (FAISS / ChromaDB)**:
-   - Add FAISS index integration (`faiss-cpu`) to enable sub-millisecond similarity search across large galleries of face vectors.
-
-4. **FastAPI REST Service (`api/app.py`)**:
-   - Wrap `ArcFaceService` into a REST API exposing `/convert`, `/compare`, and `/search` endpoints for seamless integration with WayFind web & mobile clients.
-
-5. **GPU Acceleration & Optimization**:
-   - Add support for `CUDAExecutionProvider` and `TensorRTExecutionProvider` for high-FPS multi-camera tracking.
-
----
-
-## 4. Context Skill Update & Maintenance Guardrails
+## 6. Context Skill Maintenance Guardrails
 
 > [!IMPORTANT]
-> **MANDATORY Context Synchronization Guardrail**
-> 1. **Trigger for Update**: Whenever updating any component, introducing new features/files, refactoring architecture, adjusting dependencies, or completing any user task (especially tasks not previously documented in this skill), the agent MUST update this Context Skill upon completing the work phase.
-> 2. **Post-Phase Synchronization**: After completing any implementation phase or task, verify and update:
->    - **Completed Work & Current Implementation (Section 2)**: Record new capabilities, added files, and completed roadmap items.
->    - **Architecture & Dependencies (Section 1 & 2A)**: Update system topology or package dependencies if changed.
->    - **Pending Roadmap (Section 3)**: Update remaining, modified, or newly identified project tasks.
-> 3. **Pre-Push Validation Requirement**: Before executing `git push` to upload code to GitHub, check whether the Context Skill accurately reflects the latest codebase state. If updates are needed, update both [`context/SKILL.md`](file:///c:/Users/Lenovo/Desktop/FaceTracking/context/SKILL.md) and [`.agents/skills/context/SKILL.md`](file:///c:/Users/Lenovo/Desktop/FaceTracking/.agents/skills/context/SKILL.md), stage them (`git add .`), and commit before pushing.
-
+> **MANDATORY: Update this file and `context/SKILL.md` together before every `git push`.**
+> - Section 3 (Completed Work): record new capabilities and files added
+> - Section 5 (Roadmap): mark completed/pending items
+> - Section 2 (Architecture): update if modalities, patterns, or structure changes
